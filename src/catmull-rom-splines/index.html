@@ -1,0 +1,397 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Catmull-Rom Spline Visualization</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            padding: 20px;
+        }
+
+        h1 {
+            color: #e94560;
+            margin-bottom: 20px;
+            text-shadow: 0 0 20px rgba(233, 69, 96, 0.5);
+            font-size: 2rem;
+        }
+
+        .container {
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 20px;
+            padding: 30px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        canvas {
+            display: block;
+            border-radius: 12px;
+            background: rgba(0, 0, 0, 0.3);
+            cursor: grab;
+        }
+
+        canvas:active {
+            cursor: grabbing;
+        }
+
+        .controls {
+            margin-top: 20px;
+            display: flex;
+            gap: 15px;
+            justify-content: center;
+            flex-wrap: wrap;
+        }
+
+        button {
+            padding: 12px 24px;
+            font-size: 1rem;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            font-weight: 600;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #e94560, #c73659);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 20px rgba(233, 69, 96, 0.4);
+        }
+
+        .btn-secondary {
+            background: linear-gradient(135deg, #4a6cf7, #3b5ce5);
+            color: white;
+        }
+
+        .btn-secondary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 20px rgba(74, 108, 247, 0.4);
+        }
+
+        .info {
+            margin-top: 15px;
+            color: rgba(255, 255, 255, 0.7);
+            font-size: 0.9rem;
+            text-align: center;
+        }
+
+        .speed-control {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            color: white;
+        }
+
+        input[type="range"] {
+            width: 120px;
+            accent-color: #e94560;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>✨ Catmull-Rom Spline</h1>
+    <div class="container">
+        <canvas id="canvas" width="800" height="600"></canvas>
+        <div class="controls">
+            <button class="btn-primary" id="toggleAnimation">⏸ Pause</button>
+            <button class="btn-secondary" id="randomize">🎲 Randomize Points</button>
+            <div class="speed-control">
+                <label for="speed">Speed:</label>
+                <input type="range" id="speed" min="0.1" max="3" step="0.1" value="1">
+            </div>
+        </div>
+        <p class="info">Drag control points to reshape the spline</p>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+
+        // Control points
+        let points = [];
+        const numPoints = 10;
+
+        // Animation state
+        let t = 0;
+        let speed = 1;
+        let isAnimating = true;
+        let currentSegment = 0;
+
+        // Dragging state
+        let isDragging = false;
+        let dragPointIndex = -1;
+
+        // Initialize random points
+        function initializePoints() {
+            points = [];
+            const padding = 80;
+            const width = canvas.width - padding * 2;
+            const height = canvas.height - padding * 2;
+
+            for (let i = 0; i < numPoints; i++) {
+                points.push({
+                    x: padding + Math.random() * width,
+                    y: padding + Math.random() * height
+                });
+            }
+        }
+
+        // Catmull-Rom spline interpolation
+        // q(t) = 0.5 * ((-p1 + 3*p2 - 3*p3 + p4) * t³
+        //             + (2*p1 - 5*p2 + 4*p3 - p4) * t²
+        //             + (-p1 + p3) * t
+        //             + 2*p2)
+        function catmullRom(p0, p1, p2, p3, t) {
+            const t2 = t * t;
+            const t3 = t2 * t;
+
+            return {
+                x: 0.5 * (
+                    (-p0.x + 3 * p1.x - 3 * p2.x + p3.x) * t3 +
+                    (2 * p0.x - 5 * p1.x + 4 * p2.x - p3.x) * t2 +
+                    (-p0.x + p2.x) * t +
+                    2 * p1.x
+                ),
+                y: 0.5 * (
+                    (-p0.y + 3 * p1.y - 3 * p2.y + p3.y) * t3 +
+                    (2 * p0.y - 5 * p1.y + 4 * p2.y - p3.y) * t2 +
+                    (-p0.y + p2.y) * t +
+                    2 * p1.y
+                )
+            };
+        }
+
+        // Get point on the full spline path (closed loop)
+        function getPointOnPath(globalT) {
+            const numSegments = points.length; // Use all points for closed loop
+            const segmentT = globalT * numSegments;
+            const segment = Math.floor(segmentT) % points.length;
+            const localT = segmentT - Math.floor(segmentT);
+
+
+            // Get the four control points for this segment
+            const p0 = points[(segment + points.length - 1) % points.length];
+            const p1 = points[segment];
+            const p2 = points[(segment + 1) % points.length];
+            const p3 = points[(segment + 2) % points.length];
+
+            return catmullRom(p0, p1, p2, p3, localT);
+        }
+
+        function clamp(value, min, max) {
+            return Math.max(min, Math.min(max, value));
+        }
+
+        // Draw the spline curve
+        function drawSpline() {
+            ctx.beginPath();
+
+            const steps = 200;
+            for (let i = 0; i <= steps; i++) {
+                const t = i / steps;
+                const point = getPointOnPath(t);
+
+                if (i === 0) {
+                    ctx.moveTo(point.x, point.y);
+                } else {
+                    ctx.lineTo(point.x, point.y);
+                }
+            }
+
+            // Gradient stroke
+            const gradient = ctx.createLinearGradient(0, 0, canvas.width, canvas.height);
+            gradient.addColorStop(0, '#e94560');
+            gradient.addColorStop(0.5, '#4a6cf7');
+            gradient.addColorStop(1, '#00d9ff');
+
+            ctx.strokeStyle = gradient;
+            ctx.lineWidth = 3;
+            ctx.lineCap = 'round';
+            ctx.lineJoin = 'round';
+            ctx.stroke();
+
+            // Draw glow effect
+            ctx.strokeStyle = 'rgba(233, 69, 96, 0.3)';
+            ctx.lineWidth = 8;
+            ctx.stroke();
+        }
+
+        // Draw control points
+        function drawControlPoints() {
+            points.forEach((point, index) => {
+                // Outer glow
+                ctx.beginPath();
+                ctx.arc(point.x, point.y, 15, 0, Math.PI * 2);
+                ctx.fillStyle = 'rgba(74, 108, 247, 0.3)';
+                ctx.fill();
+
+                // Inner circle
+                ctx.beginPath();
+                ctx.arc(point.x, point.y, 10, 0, Math.PI * 2);
+                ctx.fillStyle = index === dragPointIndex ? '#00d9ff' : '#4a6cf7';
+                ctx.fill();
+                ctx.strokeStyle = 'white';
+                ctx.lineWidth = 2;
+                ctx.stroke();
+
+                // Point number
+                ctx.fillStyle = 'white';
+                ctx.font = 'bold 10px Arial';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillText(index + 1, point.x, point.y);
+            });
+        }
+
+        // Draw the moving point
+        function drawMovingPoint(globalT) {
+            const point = getPointOnPath(globalT);
+
+            // Trail effect
+            const trailLength = 20;
+            for (let i = trailLength; i > 0; i--) {
+                const trailT = globalT - (i / trailLength) * 0.05;
+                if (trailT >= 0) {
+                    const trailPoint = getPointOnPath(trailT);
+                    ctx.beginPath();
+                    ctx.arc(trailPoint.x, trailPoint.y, 4 * (1 - i / trailLength), 0, Math.PI * 2);
+                    ctx.fillStyle = `rgba(0, 217, 255, ${0.5 * (1 - i / trailLength)})`;
+                    ctx.fill();
+                }
+            }
+
+            // Outer glow
+            ctx.beginPath();
+            ctx.arc(point.x, point.y, 25, 0, Math.PI * 2);
+            const glowGradient = ctx.createRadialGradient(point.x, point.y, 0, point.x, point.y, 25);
+            glowGradient.addColorStop(0, 'rgba(0, 217, 255, 0.5)');
+            glowGradient.addColorStop(1, 'rgba(0, 217, 255, 0)');
+            ctx.fillStyle = glowGradient;
+            ctx.fill();
+
+            // Main point
+            ctx.beginPath();
+            ctx.arc(point.x, point.y, 12, 0, Math.PI * 2);
+            const pointGradient = ctx.createRadialGradient(point.x - 3, point.y - 3, 0, point.x, point.y, 12);
+            pointGradient.addColorStop(0, '#00ffff');
+            pointGradient.addColorStop(1, '#0088ff');
+            ctx.fillStyle = pointGradient;
+            ctx.fill();
+            ctx.strokeStyle = 'white';
+            ctx.lineWidth = 2;
+            ctx.stroke();
+        }
+
+        // Main render loop
+        function render() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            drawSpline();
+            drawControlPoints();
+            drawMovingPoint(t);
+
+            if (isAnimating) {
+                t += 0.002 * speed;
+                if (t > 1) t = 0;
+            }
+
+            requestAnimationFrame(render);
+        }
+
+        // Mouse event handlers
+        function getMousePos(e) {
+            const rect = canvas.getBoundingClientRect();
+            return {
+                x: e.clientX - rect.left,
+                y: e.clientY - rect.top
+            };
+        }
+
+        function findNearestPoint(pos) {
+            let nearestIndex = -1;
+            let nearestDist = Infinity;
+
+            points.forEach((point, index) => {
+                const dx = pos.x - point.x;
+                const dy = pos.y - point.y;
+                const dist = Math.sqrt(dx * dx + dy * dy);
+
+                if (dist < nearestDist && dist < 20) {
+                    nearestDist = dist;
+                    nearestIndex = index;
+                }
+            });
+
+            return nearestIndex;
+        }
+
+        canvas.addEventListener('mousedown', (e) => {
+            const pos = getMousePos(e);
+            dragPointIndex = findNearestPoint(pos);
+
+            if (dragPointIndex !== -1) {
+                isDragging = true;
+            }
+        });
+
+        canvas.addEventListener('mousemove', (e) => {
+            const pos = getMousePos(e);
+
+            if (isDragging && dragPointIndex !== -1) {
+                points[dragPointIndex] = pos;
+            }
+        });
+
+        canvas.addEventListener('mouseup', () => {
+            isDragging = false;
+            dragPointIndex = -1;
+        });
+
+        canvas.addEventListener('mouseleave', () => {
+            isDragging = false;
+            dragPointIndex = -1;
+        });
+
+        // Button handlers
+        document.getElementById('toggleAnimation').addEventListener('click', function () {
+            isAnimating = !isAnimating;
+            this.textContent = isAnimating ? '⏸ Pause' : '▶️ Play';
+        });
+
+        document.getElementById('randomize').addEventListener('click', () => {
+            initializePoints();
+            t = 0;
+        });
+
+        document.getElementById('speed').addEventListener('input', function () {
+            speed = parseFloat(this.value);
+        });
+
+        // Initialize and start
+        initializePoints();
+        render();
+    </script>
+</body>
+
+</html>
